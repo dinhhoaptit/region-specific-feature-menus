@@ -26,12 +26,14 @@ See `data/README.md`. Experiments then run offline from `data/*.npz`.
 
 ```text
 python examples/kais_extra_evidence.py
+python examples/kais_stability_budget.py
+python examples/kais_conditional_greedy.py --ct --sc --max-rows 8000
+python examples/kais_when_to_regionalize.py --all --max-rows 8000
+python examples/kais_named_menus.py
 python examples/generate_paper_figures.py
 ```
 
-- `examples/kais_extra_evidence.py` writes `submission_kais/extra_evidence.json` (regional menu prefixes, Jaccard overlap, localized Lasso–LARS anytime RMSE).
-- `examples/kais_stability_budget.py` writes `submission_kais/stability_and_budget.json` and `fig6_measurement_budget.pdf` (measurement budget to target error; menu stability across splits).
-- `examples/generate_paper_figures.py` writes PDF/PNG figures. By default it currently targets `submission_kbs/figures/`; copy or point the output directory to `submission_kais/figures/` if regenerating the KAIS figures in place.
+JSON records are written under `submission_kais/`. Figure PDFs for the manuscript live in `submission_kais/figures/` (`fig6_measurement_budget.pdf` is produced by `kais_stability_budget.py`). `generate_paper_figures.py` currently writes `fig1`--`fig5` under `submission_kbs/figures/` as well; copy those PDFs into `submission_kais/figures/` if regenerating them.
 
 ## Layout
 

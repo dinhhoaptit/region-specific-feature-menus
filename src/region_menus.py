@@ -382,7 +382,55 @@ def fit_region_menus(
         labels, centers, X=x_scaler.transform(X), min_region_size=min_region_size
     )
     n_regions = int(centers.shape[0])
+    menus = _menus_from_labels(
+        X,
+        y,
+        labels=labels,
+        centers=centers,
+        selector=selector,
+        feature_order=feature_order,
+        order_by=order_by,
+        min_region_size=min_region_size,
+        max_features=max_features,
+        w0=w0,
+        delta_w=delta_w,
+        subsample_size=subsample_size,
+        random_state=random_state,
+    )
 
+    return RegionFeatureMenus(
+        n_regions=n_regions,
+        labels=labels,
+        menus=menus,
+        feature_names=names,
+        cluster_centers=centers,
+        clusterer_name=f"{partition}_{assignment}_{selector}",
+        partition=partition,
+        assignment=assignment,
+        soft_temperature=soft_temperature,
+        x_scaler=x_scaler,
+        selector=selector,
+    )
+
+
+def _menus_from_labels(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    labels: np.ndarray,
+    centers: np.ndarray,
+    selector: SelectorName,
+    feature_order: Sequence[int] | None,
+    order_by: str,
+    min_region_size: int,
+    max_features: int | None,
+    w0: float,
+    delta_w: float,
+    subsample_size: int | None,
+    random_state: int | None,
+) -> list[RegionMenu]:
+    n_regions = int(centers.shape[0])
+    p = X.shape[1]
     menus: list[RegionMenu] = []
     for rid in range(n_regions):
         mask = labels == rid
@@ -443,17 +491,293 @@ def fit_region_menus(
                 prefix_models=prefixes,
             )
         )
+    return menus
 
-    return RegionFeatureMenus(
-        n_regions=n_regions,
-        labels=labels,
-        menus=menus,
-        feature_names=names,
-        cluster_centers=centers,
-        clusterer_name=f"{partition}_{assignment}_{selector}",
-        partition=partition,
-        assignment=assignment,
-        soft_temperature=soft_temperature,
-        x_scaler=x_scaler,
-        selector=selector,
-    )
+
+def _menu_jaccard(a: Sequence[int], b: Sequence[int], k: int = 8) -> float:
+    sa, sb = set(list(a)[:k]), set(list(b)[:k])
+    if not sa and not sb:
+        return 1.0
+    return len(sa & sb) / max(len(sa | sb), 1)
+
+
+@dataclass
+class AlternatingFitResult:
+    """Two-stage fit (iterate 0) plus residual-reassignment refinements."""
+
+    models: list[RegionFeatureMenus]
+    history: list[dict]
+
+
+def fit_region_menus_alternating(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    n_refine: int = 3,
+    reassign_budget: int = 5,
+    **kwargs,
+) -> AlternatingFitResult:
+    """Alternate menu mining with y-aware reassignment, then refresh X-centers.
+
+    Iterate 0 is the current two-stage pipeline (``fit_region_menus``). Each
+    later iterate reassigns every training point to the region whose nested
+    prefix model at ``reassign_budget`` has the smallest squared error, updates
+    region centers as means in scaled X, and rebuilds stepwise menus.
+    Test-time assignment still uses only X (the centers).
+    """
+    base_kwargs = dict(kwargs)
+    assignment = base_kwargs.get("assignment", "soft")
+    min_region_size = int(base_kwargs.get("min_region_size", 20))
+    selector = base_kwargs.get("selector", "forward_stepwise")
+    feature_order = base_kwargs.get("feature_order")
+    order_by = base_kwargs.get("order_by", "abs_corr")
+    max_features = base_kwargs.get("max_features")
+    w0 = base_kwargs.get("w0", 0.50)
+    delta_w = base_kwargs.get("delta_w", 0.05)
+    subsample_size = base_kwargs.get("subsample_size")
+    random_state = base_kwargs.get("random_state", 0)
+    partition = base_kwargs.get("partition", "residual")
+    soft_temperature = base_kwargs.get("soft_temperature", 1.0)
+    feature_names = base_kwargs.get("feature_names")
+
+    model0 = fit_region_menus(X, y, **base_kwargs)
+    models = [model0]
+    history = [
+        {
+            "iterate": 0,
+            "n_regions": int(model0.n_regions),
+            "sizes": [int(m.n_samples) for m in model0.menus],
+            "frac_relabeled": 0.0,
+            "mean_top8_jaccard_vs_prev": 1.0,
+        }
+    ]
+
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float).ravel()
+    labels = model0.labels.copy()
+    x_scaler = model0.x_scaler
+    Xs = x_scaler.transform(X) if x_scaler is not None else X
+    names = list(feature_names) if feature_names is not None else None
+
+    for t in range(1, int(n_refine) + 1):
+        prev = models[-1]
+        n_r = prev.n_regions
+        err = np.empty((X.shape[0], n_r), dtype=float)
+        for rid, menu in enumerate(prev.menus):
+            b = int(min(max(reassign_budget, 0), max(len(menu.prefix_models) - 1, 0)))
+            pred = menu.model_for_budget(b).predict(X)
+            err[:, rid] = (y - pred) ** 2
+        new_labels = np.argmin(err, axis=1).astype(int)
+        frac = float(np.mean(new_labels != labels))
+        labels = new_labels
+        centers = np.vstack(
+            [
+                Xs[labels == rid].mean(axis=0)
+                if np.any(labels == rid)
+                else Xs.mean(axis=0)
+                for rid in range(n_r)
+            ]
+        )
+        labels, centers = _merge_small_regions(
+            labels, centers, X=Xs, min_region_size=min_region_size
+        )
+        n_regions = int(centers.shape[0])
+        menus = _menus_from_labels(
+            X,
+            y,
+            labels=labels,
+            centers=centers,
+            selector=selector,
+            feature_order=feature_order,
+            order_by=order_by,
+            min_region_size=min_region_size,
+            max_features=max_features,
+            w0=w0,
+            delta_w=delta_w,
+            subsample_size=subsample_size,
+            random_state=random_state,
+        )
+        jac = []
+        for rid, menu in enumerate(menus):
+            if rid < len(prev.menus):
+                jac.append(_menu_jaccard(prev.menus[rid].selected, menu.selected))
+        model = RegionFeatureMenus(
+            n_regions=n_regions,
+            labels=labels,
+            menus=menus,
+            feature_names=names,
+            cluster_centers=centers,
+            clusterer_name=f"{partition}_{assignment}_{selector}_alt{t}",
+            partition=partition,
+            assignment=assignment,
+            soft_temperature=soft_temperature,
+            x_scaler=x_scaler,
+            selector=selector,
+        )
+        models.append(model)
+        history.append(
+            {
+                "iterate": t,
+                "n_regions": n_regions,
+                "sizes": [int(m.n_samples) for m in menus],
+                "frac_relabeled": frac,
+                "mean_top8_jaccard_vs_prev": float(np.mean(jac)) if jac else 1.0,
+            }
+        )
+
+    return AlternatingFitResult(models=models, history=history)
+
+
+def mixture_gaussian_bic(
+    model: RegionFeatureMenus,
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    budget: int,
+) -> float:
+    """Gaussian BIC of the soft mixture at a fixed prefix budget.
+
+    Parameter count is intercept plus prefix length in each region (shared
+    features across regions are counted separately, matching separate OLS menus).
+    """
+    y = np.asarray(y, dtype=float).ravel()
+    yhat = model.predict(X, budget=int(budget))
+    n = float(max(len(y), 1))
+    rss = float(np.sum((y - yhat) ** 2))
+    rss = max(rss, 1e-18)
+    k = 0
+    for menu in model.menus:
+        b = int(min(max(budget, 0), max(len(menu.prefix_models) - 1, 0)))
+        k += 1 + b
+    return float(n * np.log(rss / n) + k * np.log(n))
+
+
+def _fit_kwargs_view(kwargs: dict) -> dict:
+    return {
+        "assignment": kwargs.get("assignment", "soft"),
+        "min_region_size": int(kwargs.get("min_region_size", 20)),
+        "selector": kwargs.get("selector", "forward_stepwise"),
+        "feature_order": kwargs.get("feature_order"),
+        "order_by": kwargs.get("order_by", "abs_corr"),
+        "max_features": kwargs.get("max_features"),
+        "w0": kwargs.get("w0", 0.50),
+        "delta_w": kwargs.get("delta_w", 0.05),
+        "subsample_size": kwargs.get("subsample_size"),
+        "random_state": kwargs.get("random_state", 0),
+        "partition": kwargs.get("partition", "residual"),
+        "soft_temperature": kwargs.get("soft_temperature", 1.0),
+        "feature_names": kwargs.get("feature_names"),
+        "y_weight": float(kwargs.get("y_weight", 1.0)),
+    }
+
+
+def fit_region_menus_mixture_residual(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    n_refine: int = 3,
+    reassign_budget: int = 5,
+    **kwargs,
+) -> AlternatingFitResult:
+    """Recluster on mixture residuals of current prefix models, then rebuild menus.
+
+    Unlike error-based hard reassignment, points are not moved by comparing
+    regional y-fits directly. The extra clustering coordinate is the residual of
+    the current *soft mixture* prediction at ``reassign_budget``. Region centers
+    remain means in scaled X, so test assignment never uses y.
+    """
+    view = _fit_kwargs_view(kwargs)
+    model0 = fit_region_menus(X, y, **kwargs)
+    models = [model0]
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float).ravel()
+    history = [
+        {
+            "iterate": 0,
+            "n_regions": int(model0.n_regions),
+            "sizes": [int(m.n_samples) for m in model0.menus],
+            "frac_relabeled": 0.0,
+            "mean_top8_jaccard_vs_prev": 1.0,
+            "train_bic": mixture_gaussian_bic(
+                model0, X, y, budget=int(reassign_budget)
+            ),
+        }
+    ]
+    x_scaler = model0.x_scaler
+    Xs = x_scaler.transform(X) if x_scaler is not None else X
+    names = list(view["feature_names"]) if view["feature_names"] is not None else None
+    labels = model0.labels.copy()
+    n_target = int(model0.n_regions)
+    rs_seed = 0 if view["random_state"] is None else int(view["random_state"])
+
+    for t in range(1, int(n_refine) + 1):
+        prev = models[-1]
+        yhat = prev.predict(X, budget=int(reassign_budget))
+        resid = (y - yhat).reshape(-1, 1)
+        rs = StandardScaler().fit_transform(resid) * view["y_weight"]
+        z = np.hstack([Xs, rs])
+        n_cl = int(min(n_target, X.shape[0]))
+        km = KMeans(n_clusters=n_cl, n_init=10, random_state=rs_seed + 17 * t)
+        new_labels = km.fit_predict(z).astype(int)
+        frac = float(np.mean(new_labels != labels))
+        labels = new_labels
+        centers = np.vstack(
+            [
+                Xs[labels == rid].mean(axis=0)
+                if np.any(labels == rid)
+                else Xs.mean(axis=0)
+                for rid in range(n_cl)
+            ]
+        )
+        labels, centers = _merge_small_regions(
+            labels, centers, X=Xs, min_region_size=view["min_region_size"]
+        )
+        n_regions = int(centers.shape[0])
+        menus = _menus_from_labels(
+            X,
+            y,
+            labels=labels,
+            centers=centers,
+            selector=view["selector"],
+            feature_order=view["feature_order"],
+            order_by=view["order_by"],
+            min_region_size=view["min_region_size"],
+            max_features=view["max_features"],
+            w0=view["w0"],
+            delta_w=view["delta_w"],
+            subsample_size=view["subsample_size"],
+            random_state=view["random_state"],
+        )
+        jac = [
+            _menu_jaccard(prev.menus[rid].selected, menu.selected)
+            for rid, menu in enumerate(menus)
+            if rid < len(prev.menus)
+        ]
+        model = RegionFeatureMenus(
+            n_regions=n_regions,
+            labels=labels,
+            menus=menus,
+            feature_names=names,
+            cluster_centers=centers,
+            clusterer_name=f"{view['partition']}_{view['assignment']}_{view['selector']}_mixres{t}",
+            partition=view["partition"],
+            assignment=view["assignment"],
+            soft_temperature=view["soft_temperature"],
+            x_scaler=x_scaler,
+            selector=view["selector"],
+        )
+        models.append(model)
+        history.append(
+            {
+                "iterate": t,
+                "n_regions": n_regions,
+                "sizes": [int(m.n_samples) for m in menus],
+                "frac_relabeled": frac,
+                "mean_top8_jaccard_vs_prev": float(np.mean(jac)) if jac else 1.0,
+                "train_bic": mixture_gaussian_bic(
+                    model, X, y, budget=int(reassign_budget)
+                ),
+            }
+        )
+
+    return AlternatingFitResult(models=models, history=history)
