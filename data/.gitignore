@@ -1,0 +1,13 @@
+# Local experiment datasets (downloaded once; see examples/download_datasets.py)
+#
+# Paper datasets:
+#   ct_slices.npz
+#   superconductivity.npz
+#   tecator.npz
+#   topo_2_1.npz
+#
+# Synthetic hard controls are generated in code (not stored here).
+# Optional: year_msd.npz via `python examples/download_datasets.py --optional`
+*
+!.gitignore
+!README.md

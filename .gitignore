@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+# Data (download locally; do not push npz/arff)
+data/*
+!data/.gitignore
+!data/README.md
+# LaTeX build files
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

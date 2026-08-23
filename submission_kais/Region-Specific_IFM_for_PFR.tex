@@ -1,0 +1,521 @@
+% =============================================================================
+% Knowledge and Information Systems (Springer) -- regular research article
+% File: Region-Specific_IFM_for_PFR.tex
+% Compile: pdflatex Region-Specific_IFM_for_PFR
+%          bibtex   Region-Specific_IFM_for_PFR
+%          pdflatex Region-Specific_IFM_for_PFR (x2)
+% =============================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{graphicx}
+\usepackage[authoryear,round,sort&compress]{natbib}
+\usepackage{xcolor}
+\usepackage{setspace}
+\usepackage{microtype}
+\usepackage{xurl}
+\usepackage[hidelinks]{hyperref}
+\onehalfspacing
+\setlength{\emergencystretch}{2em}
+
+\title{Region-Specific Incremental Feature Menus for Progressive Feature Revelation}
+
+\author{
+  Hoa Dinh Nguyen\thanks{Corresponding author. Email: \texttt{hoand@ptit.edu.vn}. Open Researcher and Contributor ID (ORCID): \href{https://orcid.org/0009-0004-1708-9248}{0009-0004-1708-9248}.}\\
+  \small Posts and Telecommunications Institute of Technology, Hanoi, Vietnam
+}
+
+\date{}
+
+\graphicspath{{figures/}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+When covariates must be acquired under a budget, a predictor should be useful before the full feature vector is observed. This paper treats that setting as a knowledge-discovery problem. The object to be mined is not a single global support, but a collection of region-specific ordered feature menus: inspectable acquisition knowledge that says which measurements to obtain next in each region of the input space.
+
+The proposed method partitions the training inputs, runs forward stepwise selection with Bayesian information criterion (BIC) stopping inside each region, and stores nested prefix least-squares models for every menu length. At test time a query is assigned to regions and features are revealed along the local menu. Performance is scored by an anytime root-mean-square error (RMSE) curve rather than by full-feature risk alone.
+
+On heterogeneous regression tasks, region menus reduce progressive RMSE relative to a strong global stepwise baseline. Large gains are obtained on computed tomography (CT) slice localization (sample size \(n\) up to \(5.35\times 10^4\), feature dimension \(p=384\)) and superconductivity prediction (\(n\approx 2.1\times 10^4\), \(p=81\)); these gains persist as \(n\) grows. Early menu entries differ sharply across regions (mean top-eight Jaccard similarity \(0.011\) on CT slices and \(0.057\) on superconductivity), so the discovered knowledge is not a restatement of one pooled ranking. Localized Lasso--LARS menus, re-scored with the same nested anytime protocol, improve on global stepwise but remain weaker than forward-stepwise region menus at early budgets. Mixed results on correlated synthetics and a weak-signal control bound the claim: a single global menu can suffice when mechanisms are homogeneous or signal is scarce. Region menus are therefore a practical, auditable form of local feature knowledge for anytime prediction, not a blanket substitute for global feature selection.
+\end{abstract}
+
+\noindent\textbf{Keywords:} feature selection; knowledge discovery; anytime prediction; local models; data mining; progressive feature revelation
+
+\section{Introduction}
+\label{sec:intro}
+
+Classical supervised regression is usually formulated under a complete observation assumption: for a query \(\mathbf{x}_q\in\mathbb{R}^p\), where \(p\) denotes the feature dimension, all coordinates are available before prediction. In knowledge-discovery and data-engineering settings that assumption is often unrealistic. Measurements may be costly, streamed, or revealed on demand: only a subset of imaging descriptors may be computed under a latency budget; additional spectral or physicochemical variables incur cost; sensors come online asynchronously. Prediction must then be useful before the full feature vector is known.
+
+This induces a progressive feature revelation (or anytime acquisition) problem \citep{ma2019,covert2023}: features are disclosed one by one according to an acquisition order \(\pi\), and after budget \(b\) the learner may use only the first \(b\) revealed coordinates. The natural performance object is not a single test root-mean-square error (RMSE), but a curve of error versus budget. An acquisition policy is valuable if it reduces error quickly at small \(b\), not only if it eventually matches a full-feature model. From a knowledge-systems perspective, the policy itself is the knowledge artifact: an ordered list of what to measure next.
+
+A simple and widely used family of policies learns one global feature order---for example by ranking absolute correlations with the response \citep{guyon2003}, by forward stepwise regression, by least absolute shrinkage and selection operator (Lasso) / least-angle regression (LARS) regularization paths \citep{tibshirani1996,efron2004}, or by streamwise procedures such as \(\alpha\)-investing and variance inflation factor (VIF) regression \citep{zhou2006,foster2008,lin2011}. The same order is then applied to every query. Global orders are easy to interpret and often strong when the regression mechanism is approximately homogeneous. Their weakness is structural: they ignore regional heterogeneity. Different parts of the input space may depend on different covariates, so the feature that is most useful on average need not be the feature that is most useful for this query.
+
+The central idea of this paper is that acquisition knowledge should be piecewise, not global. If the input space can be partitioned into regions with relatively stable local relevance patterns, then an ordered feature menu can be maintained for each region. A query is first localized to a region (or a soft combination of regions); subsequent acquisitions are guided by that menu; and predictions are produced by nested models trained on menu prefixes. In effect, a single acquisition schedule is replaced by a mixture of schedules. Because each regional menu can be stored, inspected, and executed cheaply at test time, the resulting representation is local feature knowledge in the ordinary data-mining sense: compact, auditable, and reusable.
+
+This idea sits between two classical traditions. On one side, local learning adapts the regression fit to a neighborhood of the query \citep{atkeson1997,cleveland1988}, but typically assumes that the neighborhood already has access to the same full feature set. On the other side, feature selection produces sparse supports or ordered lists \citep{guyon2003}, but usually one list for the entire population. Progressive revelation needs both ingredients: locality in which features matter, and incrementality in when they are acquired. A computationally light compromise is obtained via region-specific menus---constant menus within regions, rather than a fully instance-adaptive acquisition policy \citep{ma2019,covert2023}---while interpretability and scalability to tens of thousands of samples and hundreds of features are retained.
+
+``Just cluster and select'' is insufficient as a scientific contribution unless carefully formulated, for several reasons:
+\begin{enumerate}
+  \item \textbf{Objective mismatch.} Feature selection is usually tuned for full-feature risk (or model sparsity). Accuracy of the nested-model path at intermediate budgets is required under progressive revelation. Even when a good final support is eventually found, poor early features may still be acquired.
+  \item \textbf{Partition quality.} Regions formed from a feature matrix \(\mathbf{X}\) alone may not be aligned with changes in the regression mechanism. Conversely, partitions that use a response vector \(\mathbf{y}\) at training time must still be usable at test time from \(\mathbf{X}\) only.
+  \item \textbf{Sample fragmentation.} Per-region sample size is reduced when data are split into regions, and selection can be destabilized, especially when \(p\) is large. Usefulness of the method under this bias--variance tension must be retained.
+  \item \textbf{Evaluation discipline.} Claims about progressive revelation must be tested with anytime curves and with negative controls: weak-signal data and regimes where global selection is already near-optimal.
+\end{enumerate}
+
+This study makes the following three contributions, sized for a knowledge-discovery rather than a general learning-theory claim:
+\begin{enumerate}
+  \item \textbf{Knowledge representation.} Progressive feature revelation is formalized, and region-specific incremental feature menus are defined as piecewise-constant acquisition knowledge: one ordered list per region, with nested prefix predictors for partial-information prediction.
+  \item \textbf{Mining procedure.} A two-stage pipeline is developed comprising (i) hard and soft region assignment, (ii) \(\mathbf{y}\)-aware and residual-based partitioning options, (iii) per-region forward stepwise selection with Bayesian information criterion (BIC) stopping and scalable QR factorization updates, and (iv) nested ordinary least-squares (OLS) prefix models for budget-\(b\) prediction. Among candidate constructors (forward stepwise, VIF/\(\alpha\)-investing, Lasso--LARS), forward stepwise is adopted as the primary miner because the strongest early-budget progressive performance was obtained with it in the reported comparisons.
+  \item \textbf{Evaluation protocol with bounded claims.} Menus are scored by anytime RMSE, exhibited as knowledge (early entries and Jaccard overlap across regions), compared with localized Lasso--LARS under the same nested protocol, and read as a measurement budget (how many features are needed to match a global-menu error target). Stability across random splits is reported for the covering set of early regional features. Mixed outcomes on weak-signal and globally recoverable synthetic regimes delineate when a single global menu remains sufficient.
+\end{enumerate}
+
+The remainder of the paper is as follows. Related work and gaps are reviewed in Section~\ref{sec:related}. The proposed method is presented in Section~\ref{sec:method}. Experimental results are presented in Section~\ref{sec:experiments}. Implications and limitations are discussed in Section~\ref{sec:discussion}. Conclusions are given in Section~\ref{sec:conclusion}.
+
+\section{Related work}
+\label{sec:related}
+
+Feature selection is a core knowledge-discovery task: identify a compact, interpretable subset (or ranking) of variables that supports prediction and explanation \citep{guyon2003,li2017kais,bolon2013kais}. Filter, wrapper, and embedded methods remain the standard taxonomy. Forward stepwise regression is a greedy path method; Lasso and LARS provide regularization paths whose entry order can also be read as a ranking \citep{tibshirani1996,efron2004}. Controlled synthetic studies have long been used to stress-test selectors under irrelevance, redundancy, and small \(n/p\) \citep{bolon2013kais}. Greedy selectors typically return one solution, even when several statistically equivalent supports exist \citep{borboudakis2021}; regional menus make a related point in a different direction, by retaining several ordered lists that are specialized to subpopulations rather than alternative global supports.
+
+Streamwise and online feature selection consider candidates sequentially and control overfitting via adaptive thresholds, notably \(\alpha\)-investing and VIF regression \citep{zhou2006,foster2008,lin2011}. Online streaming feature selection further addresses features that arrive over time \citep{wu2013,zhou2017kbs}. These methods usually produce one ordered support for the whole training distribution. Progressive revelation exposes a second axis of difficulty: the order that is optimal globally may be suboptimal locally. Incremental selectors are reused here as menu constructors inside regions, and they are evaluated by anytime error, not only by final support quality.
+
+Clusterwise regression and mixture-of-experts models allow different linear predictors in different latent groups \citep{desarbo1988,jordan1994}. Sparse and regularized mixtures select features within components \citep{chamroukhi2019}. Localized Lasso and related network/sample-wise sparsity methods learn supports that vary smoothly across samples or clusters \citep{yamada2017}. Lasso-penalized clusterwise linear regression jointly addresses grouping and selection \citep{dimari2023}. Cluster-localized sparse logistic models similarly allow single-nucleotide polymorphism (SNP) effects to differ across subgroups \citep{binder2012}. Much of this literature optimizes full-observation predictive risk or interpretability of subgroup supports. It rarely treats the selected order as an acquisition schedule for partial observations, nor does it report progressive-revelation curves. The proposed pipeline is intentionally two-stage (partition, then select) and is scored by budget-dependent RMSE. To keep the comparison with this literature fair, localized Lasso--LARS menus are re-evaluated in Section~\ref{sec:experiments} under the same nested anytime protocol, rather than only as full-support sparse models.
+
+Locally weighted regression and memory-based local learning fit models using only neighbors of a query \citep{atkeson1997,cleveland1988}. Lazy learning postpones modeling until a query arrives and can combine local linear fits with bandwidth selection via leave-one-out criteria \citep{birattari1998}. Incremental local methods such as receptive field weighted regression (RFWR) and locally weighted projection regression (LWPR) maintain receptive fields and update local parameters online \citep{schaal1998,vijayakumar2005}. These lines of work establish that spatially localized regression is often preferable to a single global fit under nonstationarity or nonlinearity. Local learning typically assumes that the same feature coordinates are already observed for neighbors and for the query. It does not, by itself, answer which feature to acquire next under a budget. The proposed menus address acquisition order, using regions as a coarse localization device rather than rebuilding a neighborhood model from scratch for every budget step.
+
+Cost-sensitive feature selection incorporates measurement costs when forming a compact informative subset \citep{zhou2016kbs}, but the resulting support is typically global and is scored by full-observation accuracy rather than by an anytime error curve. Fully instance-adaptive acquisition policies choose which unobserved feature to query next using conditional mutual information, expected utility, or reinforcement learning \citep{ma2019,covert2023}. Those policies can be powerful, but they typically require specialized value networks or generative models and may be expensive at deployment. They sit at the opposite extreme of the knowledge-systems trade-off: high adaptivity, low inspectability. Region-specific menus occupy the middle ground---piecewise-constant acquisition knowledge that is cheap to store, easy to audit, and compatible with classical stepwise statistics---without solving a full dynamic acquisition Markov decision process (MDP).
+
+Synthesizing the above, three gaps motivate this work:
+\begin{enumerate}
+  \item Anytime evaluation is underused in localized sparse regression and knowledge-discovery papers, which often report only full-feature metrics.
+  \item Global incremental selectors ignore regional relevance shifts, yet are still the default construction for ordered acquisition lists.
+  \item Fully adaptive acquisition policies are heavy; a middle ground---region-constant menus as stored local knowledge, with soft assignment---has not been systematically studied for progressive revelation in regression.
+\end{enumerate}
+
+That middle ground is targeted in this work. Region-specific incremental menus are studied as mined acquisition knowledge. The approach is validated with both positive heterogeneous cases and mixed or negative controls.
+
+\section{Proposed method}
+\label{sec:method}
+
+The overall pipeline is summarized in Figure~\ref{fig:method}: the input space is partitioned, a forward-stepwise BIC menu is built in each region, nested prefix OLS models are fitted, and at test time a query is assigned to regions before features are acquired along the local menu up to budget~$b$.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig1_method_overview.pdf}
+\caption{Overview of region-specific incremental feature menus. Training partitions the input space, builds a forward-stepwise Bayesian information criterion (BIC) menu in each region, and fits nested prefix ordinary least-squares (OLS) models. At test time, a query is assigned to regions and features are acquired along the local menu up to budget~$b$.}
+\label{fig:method}
+\end{figure}
+
+\subsection{Progressive feature revelation}
+
+Vectors and matrices are written in bold; scalars are not. Let the training sample be \(\mathcal{D}=\{(\mathbf{x}_i,y_i)\}_{i=1}^n\), where \(n\) is the number of training samples, each feature vector \(\mathbf{x}_i\in\mathbb{R}^p\) has dimension \(p\), and \(y_i\in\mathbb{R}\) is the scalar response. Write \(\mathbf{X}\in\mathbb{R}^{n\times p}\) for the feature matrix with rows \(\mathbf{x}_i^\top\) and \(\mathbf{y}=(y_1,\ldots,y_n)^\top\in\mathbb{R}^n\) for the response vector. A (deterministic) acquisition order is a sequence \(\pi=(j_1,\ldots,j_m)\) of distinct feature indices, with menu length \(m\le p\). After budget \(b\in\{0,\ldots,m\}\), only coordinates in the prefix
+\[
+S_b(\pi)=\{j_1,\ldots,j_b\}
+\]
+may be used, with the empty prefix \(S_0=\emptyset\). A progressive predictor is a family \(\{\hat f_b\}_{b=0}^m\) where \(\hat f_b\) depends on a query \(\mathbf{x}\) only through coordinates in \(S_b(\pi)\). Performance is summarized by the anytime RMSE curve
+\[
+\mathrm{RMSE}(b)=\Bigl(\tfrac{1}{n_{\mathrm{te}}}\sum_{q=1}^{n_{\mathrm{te}}}\bigl(y_q-\hat f_b(\mathbf{x}_q)\bigr)^2\Bigr)^{1/2},
+\]
+where \(n_{\mathrm{te}}\) is the number of test samples and \((\mathbf{x}_q,y_q)\) denotes the \(q\)-th test pair. The goal is to learn orders and prefix models that make \(\mathrm{RMSE}(b)\) small for small and moderate \(b\), not only for \(b=m\).
+
+\subsection{Region-specific menus: overview}
+
+\(R\) regions are maintained, indexed by \(r\in\{1,\ldots,R\}\). Region \(r\) has:
+\begin{itemize}
+  \item a center \(\mathbf{c}_r\in\mathbb{R}^p\) used for assignment from \(\mathbf{X}\);
+  \item a menu \(\pi^{(r)}=(j^{(r)}_1,\ldots,j^{(r)}_{m_r})\) of length \(m_r\);
+  \item nested prefix models \(\{\hat f^{(r)}_b\}_{b=0}^{m_r}\).
+\end{itemize}
+
+Training proceeds in three stages: (i) partition training points into regions; (ii) run incremental feature selection inside each region to obtain \(\pi^{(r)}\); (iii) fit nested OLS models on menu prefixes. At test time, a query is assigned to regions, a menu is chosen (or soft-combined), and predictions are read from the corresponding prefix model(s).
+
+\subsection{Partitioning}
+
+All partitioning operates after column-wise standardization of \(\mathbf{X}\) fitted on the training fold. Let \(\mathbf{X}^{\mathrm{sc}}\in\mathbb{R}^{n\times p}\) denote the standardized feature matrix. When the response or residual channel is used, that one-dimensional vector is standardized separately to zero mean and unit variance, writing \(\mathbf{y}^{\mathrm{sc}}\in\mathbb{R}^n\) and \(\hat{\mathbf{r}}^{\mathrm{sc}}\in\mathbb{R}^n\). Thus the residual-aware and response-augmented schemes do not mix quantities on incompatible scales before clustering.
+
+\subsubsection{\texorpdfstring{\(k\)}{k}-means on \texorpdfstring{\(\mathbf{X}\)}{X} (\texttt{kmeans})}
+\(\mathbf{X}^{\mathrm{sc}}\) is clustered into \(R\) groups. Region centers used at test time are the empirical means of \(\mathbf{X}^{\mathrm{sc}}\) within each cluster.
+
+\subsubsection{Residual-aware clustering (\texttt{residual})}
+A global linear model is fitted \(\hat{\mathbf{y}} = \mathbf{X}^{\mathrm{sc}}\hat{\boldsymbol{\beta}}\) with coefficient vector \(\hat{\boldsymbol{\beta}}\in\mathbb{R}^p\), and the residual vector \(\hat{\mathbf{r}} = \mathbf{y}-\hat{\mathbf{y}}\) is formed. An augmented training matrix is then built
+\[
+\mathbf{A}_{\mathrm{res}} = [\,\mathbf{X}^{\mathrm{sc}},\, w\hat{\mathbf{r}}^{\mathrm{sc}}\,] \in \mathbb{R}^{n\times (p+1)},
+\]
+that is, the \(i\)-th row is the \((p+1)\)-dimensional vector
+\[
+\mathbf{a}_i = \bigl((\mathbf{x}^{\mathrm{sc}}_i)^\top,\; w\hat r^{\mathrm{sc}}_i\bigr).
+\]
+Standard \(k\)-means is then run on the rows \(\mathbf{a}_1,\ldots,\mathbf{a}_n\). The extra coordinate \(w\hat r^{\mathrm{sc}}_i\) acts as a training-time signal about whether point \(i\) is systematically under- or over-predicted by the global linear fit. Hence two points that are nearby in \(\mathbf{X}^{\mathrm{sc}}\) but have very different residual behavior can be separated into different regions. The scalar \(w>0\) controls how much that residual coordinate influences Euclidean distance relative to the standardized feature coordinates.
+
+After clustering, the extra residual coordinate is discarded and only the region centers are stored in \(\mathbf{X}^{\mathrm{sc}}\)-space, computed as the empirical mean of the standardized feature vectors assigned to each cluster. Therefore, at test time, a new query is assigned using only its standardized feature vector \(\mathbf{x}^{\mathrm{sc}}\), not an unknown residual. In this sense, the residual channel influences the \emph{training} partition but does not create test-time leakage.
+
+\subsubsection{Response-augmented clustering (\texttt{xy})}
+This is analogous, but the standardized response itself is used instead of the residual. The matrix
+\[
+\mathbf{A}_{xy} = [\,\mathbf{X}^{\mathrm{sc}},\, w\mathbf{y}^{\mathrm{sc}}\,] \in \mathbb{R}^{n\times (p+1)},
+\]
+is formed, \(k\)-means is run on its rows, and only the corresponding \(\mathbf{X}^{\mathrm{sc}}\)-means are stored for test-time assignment. As above, the extra coordinate is used only to shape the training partition.
+
+\subsubsection{Small-region repair}
+If a cluster contains fewer than \(n_{\min}\) points, where \(n_{\min}\) is a minimum region-size threshold, its members are reassigned to the nearest sufficiently large region in \(\mathbf{X}^{\mathrm{sc}}\)-space, and region indices are compacted. This mitigates unstable menus in tiny fragments.
+
+\subsection{Per-region incremental selection}
+
+Within region \(r\), let \(\mathcal{D}_r\) be the local sample of size \(n_r\). The menu \(\pi^{(r)}\) is constructed by forward stepwise regression with BIC stopping.
+
+The procedure is started from the intercept-only model. At step \(t\), among unused features, the index that most reduces residual sum of squares (RSS) when added to the current model is selected. The addition is accepted only if BIC decreases:
+\[
+\mathrm{BIC}= n_r\log(\mathrm{RSS}/n_r) + k\log n_r,
+\]
+where \(k\) counts free parameters (intercept plus selected slopes). Iteration stops when no candidate improves BIC, or when a cap \(m_{\max}\) on menu length is reached.
+
+\subsubsection{Scalable update}
+Rather than refitting OLS for every candidate at every step, an orthonormal basis of the current model span is maintained (starting from a normalized intercept column) and candidates are residualized against that basis. The RSS reduction of adding a residualized candidate \(\mathbf{z}\) equals \((\mathbf{z}^\top \mathbf{e})^2/\|\mathbf{z}\|_2^2\) for current residual vector \(\mathbf{e}\). After accepting a feature, the basis and all candidate residuals are updated by a single rank-one orthogonalization. This yields an \(O(n_r p_{\mathrm{cand}})\) cost per step, where \(p_{\mathrm{cand}}\) is the number of candidate features under consideration, and matches the exact forward-stepwise RSS criterion under full column rank.
+
+\subsubsection{Optional screening}
+When \(p\) is large, candidates may first be restricted to the top \(p_{\mathrm{screen}}\) features by absolute Pearson correlation with \(\mathbf{y}\) inside the region. Screening is a computational device; the menu order among survivors is still determined by stepwise BIC.
+
+\subsubsection{Why forward stepwise for menus}
+Under the same residual/soft regional scaffold, forward stepwise, VIF regression with \(\alpha\)-investing \citep{lin2011}, and Lasso-LARS path entry orders \citep{efron2004} were compared. Forward stepwise consistently produced competitive or superior early-budget progressive RMSE and typically sparser menus. VIF was competitive but sometimes over-selected; Lasso-LARS often yielded weaker low-budget acquisition orders despite reasonable final supports. Forward stepwise is therefore fixed as the primary menu constructor.
+
+\subsection{Nested prefix models}
+
+Given menu \(\pi^{(r)}\), for each budget \(b\) the design that uses an intercept and features \(\pi^{(r)}_{1:b}\) is defined. OLS is fitted on \(\mathcal{D}_r\) to obtain \(\hat f^{(r)}_b\). Budget \(b=0\) is the regional mean response. These nested models ensure that evaluation at budget \(b\) uses a predictor trained only on the first \(b\) menu features---not a masked version of a full-support model, which would be optimistically biased for progressive revelation.
+
+\subsection{Assignment and prediction at test time}
+
+For a standardized query \(\mathbf{x}^{\mathrm{sc}}\), the squared Euclidean assignment distance is defined as \(d_r(\mathbf{x})=\|\mathbf{x}^{\mathrm{sc}}-\mathbf{c}_r\|_2^2\).
+
+\subsubsection{Hard assignment}
+Let \(\hat r(\mathbf{x})=\arg\min_r d_r(\mathbf{x})\). Features are acquired along \(\pi^{(\hat r)}\) and prediction is performed with \(\hat f^{(\hat r)}_b\).
+
+\subsubsection{Soft assignment}
+Weights are defined by
+\[
+w_r(\mathbf{x})\propto \exp\bigl(-d_r(\mathbf{x})/T\bigr),
+\]
+normalized over \(r\), with temperature \(T>0\). The (scalar) prediction at budget \(b\) is
+\[
+\hat y(\mathbf{x})=\sum_{r=1}^R w_r(\mathbf{x})\,\hat f^{(r)}_{b_r}(\mathbf{x}),
+\]
+where \(b_r=\min\{b, m_r\}\) uses each region's own prefix length. Soft assignment reduces brittle boundary errors when regions overlap in \(\mathbf{X}\)-space.
+
+\subsubsection{Menu choice under soft weights}
+By default, acquisitions follow the primary region \(\arg\max_r w_r(\mathbf{x})\). An optional soft-ranking rule scores feature index \(j\) by \(\sum_r w_r(\mathbf{x})/(1+\mathrm{rank}_r(j))\) over menus that contain \(j\), where \(\mathrm{rank}_r(j)\) is the position of \(j\) in \(\pi^{(r)}\); primary-region menus are used in the main experiments for interpretability.
+
+\subsection{Complexity and implementation profile}
+
+Let \(m\le m_{\max}\) be the final menu length and \(p_{\mathrm{cand}}\) the number of stepwise candidates after screening. Per region, selection costs \(O(m\, n_r p_{\mathrm{cand}})\) with QR factorization updates. Prefix fitting is \(O(m n_r m^2)\) in a naive implementation and is negligible for the moderate \(m\) used here (\(m_{\max}\approx 20\)--\(30\)). Soft prediction is \(O(R p)\) for assignment weights plus \(O(R b)\) for prefix evaluation. The method is therefore practical for \(n\sim 10^4\)--\(10^5\) and \(p\sim 10^2\)--\(10^3\) with screening, as implied by the modular stages in Figure~\ref{fig:method}.
+
+\section{Experimental results}
+\label{sec:experiments}
+
+\subsection{Experimental protocol}
+
+Unless noted otherwise, each dataset is randomly split into training and test folds (typically 75\%/25\% or 70\%/30\%). Feature standardization is fit on the training fold only and applied to the test fold. Progressive RMSE is computed on the test set for budgets \(b=0,1,\ldots,b_{\max}\), where \(b_{\max}\) is the maximum menu length among compared methods (capped by \(m_{\max}\)). For very large test sets, up to 5{,}000 test points are subsampled for scoring while large training sets are retained, so that training reflects large-\(n\) behavior.
+
+All methods share the same splits and preprocessing. Region methods use residual-aware partitioning with soft assignment unless stated, and forward stepwise with BIC stopping as the primary menu constructor. Hyperparameters are not re-optimized separately at each budget; a single training configuration is fixed per dataset and then evaluated along the progressive curve.
+
+\subsubsection{How parameter values are obtained}
+Most operating choices are fixed by design or by a simple size-dependent rule rather than by exhaustive cross-validation, so that reported gains are not an artifact of per-dataset oracle tuning. Soft-assignment temperature is held at \(T=1\) after light exploratory checks, and the residual/response augmentation weight is likewise fixed at \(w=1\) (one standardized residual or response unit). The selector itself (forward stepwise with BIC) was chosen from the comparative study in Section~\ref{sec:method} and is then held fixed across datasets. The remaining knobs---number of regions \(R\), minimum region size \(n_{\min}\), menu-length cap \(m_{\max}\), and optional screening width---are set from \(n\) and \(p\) as follows.
+
+\subsubsection{Scaling with \texorpdfstring{\(n\)}{n} and \texorpdfstring{\(p\)}{p}}
+The number of regions is chosen by sample-size and problem regime: \(R=4\) is used on the large-\(n\) heterogeneous tasks (CT slices and superconductivity), whereas \(R=3\) is used when samples are scarce relative to dimensionality (tecator), on the weak-signal control (topo\_2\_1), and on the hard synthetic generator whose planted structure has three centers. The minimum region size is set by the rule
+\[
+n_{\min}=\max\bigl\{40,\,\min\{200,\,\lfloor n_{\mathrm{train}}/(5R)\rfloor\}\bigr\},
+\]
+so that \(n_{\min}\) grows with training sample size but is bounded below by 40 and above by 200. Consequently, larger CT and superconductivity runs admit larger repaired regions, while tecator remains constrained by its small \(n\). The menu-length cap is \(m_{\max}=25\) on CT slices, superconductivity, topo\_2\_1, and the synthetics; it is reduced to \(m_{\max}=20\) on tecator to limit over-selection under high \(p\)/low \(n\). Actual menu lengths are shorter whenever BIC stops earlier, and the evaluation horizon \(b_{\max}\) is taken as the longest realized menu among compared methods (still capped by \(m_{\max}\)). When \(p>120\), candidates are first restricted by absolute Pearson correlation inside each region to a screen of width \(\min\{p,\max\{100,20\,m_{\max}\}\}\); thus screening is active on CT slices (\(p=384\)), topo\_2\_1 (\(p=266\)), and the synthetics (\(p\in\{1000,2000\}\)), but not on superconductivity (\(p=81\)), and is only lightly binding on tecator (\(p=124\)). In short, \(R\) and \(n_{\min}\) adapt primarily to \(n\), while \(m_{\max}\) and screening width adapt primarily to the \(p\) (and \(p/n\)) regime.
+
+\subsection{Baselines}
+
+Comparison is made against:
+\begin{enumerate}
+  \item \textbf{Global one-region forward stepwise} --- the same selector on all training data; a strong, fair baseline that isolates the value of regionalization.
+  \item \textbf{Localized Lasso--LARS menus} --- the same residual/soft partition and nested prefix evaluation, but with per-region Lasso--LARS entry order \citep{efron2004,yamada2017} as the menu constructor. This is the closest knowledge-discovery neighbor: localized sparse regression scored as an acquisition schedule rather than only as a final support.
+  \item \textbf{Global VIF} --- streamwise VIF/\(\alpha\)-investing on pooled data.
+  \item \textbf{Absolute correlation order} --- acquire features by decreasing \(|\mathrm{corr}(\mathbf{x}_{:j},\mathbf{y})|\) on training data, with nested OLS prefixes, where \(\mathbf{x}_{:j}\) denotes the \(j\)-th feature column of \(\mathbf{X}\).
+  \item \textbf{Random order} --- nested OLS along a random permutation (noise floor for ordering quality).
+\end{enumerate}
+
+This baseline set is intentional. If region menus cannot beat global forward stepwise, regionalization is unnecessary for that dataset. If they only beat random or correlation ranking, the claim would be weak. If they cannot beat localized Lasso--LARS under the same partition, the contribution would collapse to clustering rather than to stepwise acquisition knowledge.
+
+\subsection{Datasets and roles}
+\label{sec:datasets}
+
+Table~\ref{tab:datasets} lists the datasets and their roles in the experimental design. CT slices predict a continuous axial reference location from a high-dimensional descriptor vector; superconductivity predicts critical temperature from physicochemical descriptors; tecator predicts fat content from near-infrared spectra; and topo\_2\_1 is retained as a weak-signal negative control.
+
+The hard synthetic control is generated as follows. Three latent regions are formed by shifting the first two feature coordinates to well-separated centers. Within each region, the remaining coordinates are drawn from a shared latent-factor model with additive noise, which induces strong feature correlations. A region-specific sparse linear response is then planted: fifteen informative features are sampled from indices \(\{2,\ldots,p-1\}\), with Gaussian coefficients and unit Gaussian observation noise. Reported settings use about \(1{,}200\) samples per region (total \(n\approx 3{,}600\)) at \(p=1{,}000\), and analogous larger-\(n\) runs at \(p=2{,}000\). Because the informative supports differ across regions while the first two coordinates already separate the groups, regional truth is present by construction. Nevertheless, a pooled forward-stepwise path may still recover a useful union of supports. This generator is therefore used as a mixed control---not as an expected win for region menus---to test whether regionalization remains necessary when a strong global stepwise path can already succeed.
+
+\begin{table}[t]
+\centering
+\caption{Datasets and experimental roles. UCI denotes the University of California, Irvine Machine Learning Repository; OpenML denotes the Open Machine Learning repository.}
+\label{tab:datasets}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.28\textwidth}c c >{\raggedright\arraybackslash}X@{}}
+\toprule
+Dataset & Approx.\ \(n\) & \(p\) & Role \\
+\midrule
+UCI CT slices & 8k / 20k / 53.5k & 384 & Primary large-\(p\), large-\(n\) heterogeneous case \\
+Superconductivity (UCI) & 21.3k & 81 & Heterogeneous materials regression \\
+Tecator (OpenML) & 240 & 124 & High-\(p\)/low-\(n\) spectral case \\
+OpenML topo\_2\_1 & 8.9k & 266 & Weak-signal negative control \\
+Synthetic hard & 3.6k--4.5k & 1000--2000 & Mixed control: region-sparse supports with correlated features; global recovery possible \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Claims tested}
+
+Using the datasets in Table~\ref{tab:datasets}, the experiments are organized around three scientific claims:
+\begin{itemize}
+  \item \textbf{C1 (heterogeneity helps):} On real datasets with plausible subpopulation structure, region menus reduce progressive RMSE relative to global forward stepwise.
+  \item \textbf{C2 (scaling):} Gains on heterogeneous data are not an artifact of small samples; they persist as \(n\) increases.
+  \item \textbf{C3 (scope):} Gains disappear or reverse when signal is weak or when a global sparse path is already near-optimal---i.e., regional menus are conditional, not universal.
+\end{itemize}
+
+\subsection{Results on CT slice localization}
+\label{sec:ct}
+
+\textbf{Claim.} On UCI CT-slice localization (\(p=384\)), region-specific forward-stepwise menus dominate global menus across budgets, and the advantage remains as \(n\) grows from thousands to tens of thousands.
+
+This is the strongest empirical support for C1 and C2. Progressive RMSE reductions are large at small budgets---where acquisition policy matters most---and remain material at higher budgets. The full progressive RMSE curves are plotted in Figure~\ref{fig:main} (left) for CT slices at \(n=8{,}000\), comparing region menus against global stepwise, global VIF, absolute-correlation, and random orders. Selected budget points across sample sizes are reported in Table~\ref{tab:ct}, and it is shown in Figure~\ref{fig:scaling} that the region-versus-global gap persists as \(n\) increases to \(53{,}500\).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig2_progressive_main.pdf}
+\caption{Progressive root-mean-square error (RMSE) versus feature budget on computed tomography (CT) slices (\(n=8{,}000\), \(p=384\); left) and superconductivity (\(n\approx 21\text{k}\), \(p=81\); right). Region menus use residual partitioning with soft assignment and forward stepwise Bayesian information criterion (BIC) selection.}
+\label{fig:main}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Progressive root-mean-square error (RMSE) on CT slices: region menus versus global one-region forward stepwise.}
+\label{tab:ct}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Setting & Budget & Region menu & Global one-region & Relative reduction \\
+\midrule
+\(n=8{,}000\) & 5 & 9.74 & 13.09 & \(\sim\)26\% \\
+\(n=8{,}000\) & 25 & 7.17 & 9.86 & \(\sim\)27\% \\
+\(n=20{,}000\) & 5 & 9.63 & 13.14 & \(\sim\)27\% \\
+\(n=20{,}000\) & 25 & 7.26 & 10.01 & \(\sim\)28\% \\
+\(n=53{,}500\) (train \(\approx 40{,}125\)) & 5 & 9.85 & 13.43 & \(\sim\)27\% \\
+\(n=53{,}500\) & 25 & 7.36 & 9.97 & \(\sim\)26\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig3_ct_scaling.pdf}
+\caption{Computed tomography (CT) slice progressive root-mean-square error (RMSE) at fixed budgets as training sample size \(n\) grows. The gap versus global stepwise remains large, supporting Claim~C2.}
+\label{fig:scaling}
+\end{figure}
+
+Two qualitative observations reinforce the quantitative gap in Table~\ref{tab:ct} and Figures~\ref{fig:main}--\ref{fig:scaling}. First, early menu entries differ across regions, indicating that the algorithm is not merely rediscovering one global ranking. Second, residual/soft and \(k\)-means/soft variants perform similarly here, suggesting that the dominant effect is regionalization itself rather than a fragile choice of partition channel. Relative to abs-corr and random orders in Figure~\ref{fig:main}, both region and global stepwise are stronger, but region menus widen the lead precisely on the anytime metric that progressive revelation cares about.
+
+\subsubsection{Menus as local knowledge}
+\label{sec:menu-knowledge}
+RMSE reductions would be consistent with a trivial explanation: four copies of essentially the same ranking, each slightly noisier. Table~\ref{tab:menus} rules that out. On the same CT \(n=8{,}000\) split used for Figure~\ref{fig:main} (left), the four residual/soft regions have training sizes \(1651\), \(1765\), \(1741\), and \(843\). The first eight stepwise features are almost disjoint: mean pairwise Jaccard similarity among those prefixes is \(0.011\). On superconductivity the corresponding mean top-eight Jaccard similarity is \(0.057\), with region sizes \(7967\), \(3530\), \(2466\), and \(1984\). A few indices recur (for example feature \(114\) appears in two CT prefixes; feature \(12\) appears in two superconductivity prefixes), which is the expected pattern of partially shared measurements plus subgroup-specific continuation. The menus are therefore local acquisition knowledge, not a restatement of the pooled stepwise path.
+
+\begin{table}[t]
+\centering
+\caption{First eight features of residual/soft forward-stepwise menus (UCI column indices, \(0\)-based). Mean pairwise Jaccard similarity of these prefixes is \(0.011\) on CT slices (\(n=8{,}000\)) and \(0.057\) on superconductivity.}
+\label{tab:menus}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Region (train size) & Ordered prefix (first eight features) \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{CT slices}, \(p=384\)} \\
+\(r=0\) (\(n_r=1651\)) & \(45,133,264,3,131,237,114,107\) \\
+\(r=1\) (\(n_r=1765\)) & \(332,258,72,306,253,288,22,265\) \\
+\(r=2\) (\(n_r=1741\)) & \(4,273,135,118,180,222,114,137\) \\
+\(r=3\) (\(n_r=843\)) & \(215,36,171,95,123,125,234,197\) \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Superconductivity}, \(p=81\)} \\
+\(r=0\) (\(n_r=7967\)) & \(62,50,28,30,9,61,38,1\) \\
+\(r=1\) (\(n_r=3530\)) & \(1,58,68,12,60,20,30,21\) \\
+\(r=2\) (\(n_r=2466\)) & \(41,10,12,42,64,70,77,33\) \\
+\(r=3\) (\(n_r=1984\)) & \(16,44,62,73,37,27,20,39\) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Localized sparse regression as an anytime neighbor}
+\label{sec:lasso-neighbor}
+Table~\ref{tab:lasso} compares forward-stepwise region menus with localized Lasso--LARS menus under the same residual/soft partition, nested prefix OLS, splits, and budgets. Regionalization itself helps: Lasso--LARS menus beat global stepwise at the reported budgets. The stepwise constructor remains stronger at early budgets, where acquisition knowledge matters most (CT, budget \(5\): \(9.74\) versus \(12.31\) versus \(13.09\); superconductivity, budget \(5\): \(17.63\) versus \(19.13\) versus \(21.38\)). The gap is smaller at budget \(25\), consistent with Lasso--LARS eventually finding useful supports while remaining a weaker schedule for the first measurements. Thus the contribution is not clustering alone; it is the combination of regional knowledge with a constructor that is scored---and here, better---as an ordered menu.
+
+\subsubsection{Measurement budget as a decision-support reading}
+\label{sec:budget-ds}
+Budget \(b\) is the number of measurements allowed before prediction. Figure~\ref{fig:budget} rereads the CT and superconductivity curves in that language: the smallest \(b\) at which a region menu matches the error of a global stepwise menu at a stated operating point. On the seed-0 splits used throughout the main figures, the region menu matches global RMSE at \(b=5\) after \textbf{one} measurement on both CT slices and superconductivity, and matches global RMSE at \(b=25\) after \textbf{five} measurements on CT slices and \textbf{four} on superconductivity. Across repeated splits the picture is stable: mean budgets of \(1.6\) (CT, five splits) and \(1.7\) (superconductivity, ten splits) to match global \(b=5\), and \(4.6\) and \(4.0\) respectively to match global \(b=25\). In other words, the same error target is reached with substantially fewer acquired features when acquisition knowledge is regional.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig6_measurement_budget.pdf}
+\caption{Progressive RMSE versus number of allowed measurements. Horizontal guides mark global stepwise error at budgets \(b=5\) (dotted) and \(b=25\) (dashed). Markers indicate the first regional budget that matches the global \(b=5\) target.}
+\label{fig:budget}
+\end{figure}
+
+\subsubsection{Stability of the mined knowledge}
+\label{sec:stability}
+Menus are knowledge only if they do not dissolve under a change of train/test split. Table~\ref{tab:stability} reports pairwise Jaccard similarity of (i)~the covering set of the first eight features from all regions and (ii)~the global stepwise top-eight list, together with how many features appear in at least half of the covering sets. Global top-eight lists are more stable, as expected for a single pooled ranking. Regional covering sets still overlap substantially (mean Jaccard \(0.53\) on CT slices over five splits; \(0.46\) on superconductivity over ten splits), and \(30\) (CT) and \(26\) (superconductivity) features recur in at least half of the splits. The anytime advantage itself is stable: region RMSE at \(b=5\) remains in a narrow band (about \(9.2\)--\(10.1\) on CT; \(17.4\)--\(17.9\) on superconductivity) and stays below the corresponding global values on every split. Regional knowledge is therefore noisier than one global list---there are more degrees of freedom---but it is not an artifact of a single partition of the data.
+
+\begin{table}[t]
+\centering
+\caption{Stability of early-feature knowledge across random train/test splits. Covering set: union of the first eight features of all regional menus. Jaccard is the mean pairwise similarity of those sets (or of global top-eight lists).}
+\label{tab:stability}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Dataset & Splits & Jaccard (region cover) & Jaccard (global top-8) & Features in \(\ge\) half of covers \\
+\midrule
+CT slices (\(n=8{,}000\)) & 5 & 0.53 & 0.77 & 30 \\
+Superconductivity & 10 & 0.46 & 0.66 & 26 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Anytime RMSE for forward-stepwise region menus, localized Lasso--LARS menus on the same partition, and global one-region stepwise.}
+\label{tab:lasso}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Dataset & Budget & Region stepwise & Region Lasso--LARS & Global stepwise \\
+\midrule
+CT slices (\(n=8{,}000\)) & 5 & 9.74 & 12.31 & 13.09 \\
+CT slices (\(n=8{,}000\)) & 25 & 7.17 & 8.38 & 9.86 \\
+Superconductivity & 5 & 17.63 & 19.13 & 21.38 \\
+Superconductivity & 25 & 15.29 & 15.76 & 18.57 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Results on superconductivity}
+\label{sec:sc}
+
+\textbf{Claim.} On superconductivity critical-temperature prediction, region menus again improve progressive RMSE against global stepwise, abs-corr, and VIF, supporting C1 beyond a single application domain.
+
+The progressive RMSE curves on superconductivity are shown in Figure~\ref{fig:main} (right), and selected budgets are reported in Table~\ref{tab:sc}. Region menus improve progressive RMSE against global stepwise and abs-corr across budgets.
+
+\begin{table}[t]
+\centering
+\caption{Progressive root-mean-square error (RMSE) on superconductivity.}
+\label{tab:sc}
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+Budget & Region (best) & Global one-region & Abs-corr (approx.) \\
+\midrule
+5 & 17.63 & 21.38 & 22.43 \\
+13 & 15.88 & 19.60 & 21.54 \\
+25 & 15.29 & 18.57 & 20.30 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The improvement in Table~\ref{tab:sc} and Figure~\ref{fig:main} (right) is not confined to the first one or two features: it accumulates along the budget axis. Table~\ref{tab:menus} shows that superconductivity menus share occasional early descriptors yet diverge in secondary entries, which is consistent with partially shared chemistry plus subgroup-specific refinement. This pattern matches the intended semantics of region-specific menus: reuse globally useful measurements early when appropriate, but specialize subsequent acquisitions.
+
+\subsection{Results on tecator spectra}
+\label{sec:tecator}
+
+\textbf{Claim.} Under scarce samples relative to dimensionality, regional menus can still improve early- and mid-budget error relative to a pooled stepwise menu, provided regions remain adequately populated.
+
+On tecator (\(n=240\), \(p=124\)), region menus achieve approximately 0.77 RMSE at budget 5 versus approximately 1.18 for global one-region stepwise, with the advantage continuing at several higher budgets (e.g., final reported budgets near 0.75 vs.\ 0.88). These reported budget comparisons are summarized as bars in Figure~\ref{fig:mixed} (right). This matters scientifically because fragmentation risk is highest precisely in the high-\(p\)/low-\(n\) regime. The result suggests that bias reduction from local relevance can outweigh variance inflation from splitting, at least when stepwise BIC prevents aggressive over-selection.
+
+\subsection{Mixed results on hard synthetics}
+\label{sec:synth}
+
+\textbf{Claim (bounded).} Regional menus are not guaranteed to beat a strong global stepwise path merely because local supports differ in the generative model.
+
+On the hard synthetics described in Section~\ref{sec:datasets} (\(p\in\{1000,2000\}\); three regions with planted 15-feature supports and correlated covariates), region menus beat random and abs-corr baselines and often beat global VIF, yet global one-region forward stepwise frequently attains the best high-budget RMSE (e.g., \(p=2000\), budget 25: global \(\approx 10.12\) vs.\ region \(\approx 10.47\)--\(10.50\)). A representative progressive curve for \(p=1000\) is shown in Figure~\ref{fig:mixed} (left): at very small budgets the comparison is closer and sometimes favors regions, but the anytime curve does not uniformly dominate.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig4_mixed_and_tecator.pdf}
+\caption{Left: progressive root-mean-square error (RMSE) on a hard correlated synthetic (\(p=1000\)), where global stepwise can remain competitive at higher budgets (Claim~C3). Right: tecator RMSE at reported budgets for region menus versus global stepwise.}
+\label{fig:mixed}
+\end{figure}
+
+This mixed outcome is informative rather than fatal. Pooled stepwise can still surface the union of important features when signals are strong and regions are linearly separable in only a few coordinates. Soft assignment and finite per-region samples can further blunt specialization. Hence C1 requires empirical heterogeneity that harms global early acquisition---not only nominal differences in support sets.
+
+\subsection{Weak-signal control}
+\label{sec:topo}
+
+\textbf{Claim (negative control).} When covariates carry little usable linear signal, progressive policies cannot manufacture accuracy; regional menus neither help nor hurt in a meaningful way.
+
+On topo\_2\_1 (\(n\approx 8.9\times 10^3\), \(p=266\)), RMSE values remain nearly flat across methods (\(\approx 0.027\)--\(0.029\)). This validates C3: anytime curves must be read conditionally on the existence of predictable structure. Including such a control protects the paper against the criticism that regional menus always look better under any high-\(p\) regime.
+
+\subsection{Summary of empirical findings}
+\label{sec:summary}
+
+Taken together, Sections~\ref{sec:ct}--\ref{sec:tecator} and Figures~\ref{fig:main}--\ref{fig:budget} provide convergent evidence that region-specific forward-stepwise menus improve progressive revelation on heterogeneous real regression problems, including demanding large-\(n\)/large-\(p\) conditions, and that the same error targets are reached with fewer measurements. Relative RMSE reductions are summarized in Figure~\ref{fig:rel} versus global stepwise at budget \(b=5\) and at a higher budget, making the contrast between heterogeneous wins and the synthetic mixed control explicit. Sections~\ref{sec:synth}--\ref{sec:topo} and Figure~\ref{fig:mixed} bound the claim: global stepwise can remain competitive when pooling is statistically healthy, and no menu policy substitutes for signal.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\textwidth]{fig5_relative_reduction.pdf}
+\caption{Relative progressive root-mean-square error (RMSE) reduction of region menus versus global stepwise at budget~$b=5$ and at a higher budget. Positive values favor region menus; the synthetic control shows limited or reversed gains at higher budgets.}
+\label{fig:rel}
+\end{figure}
+
+\section{Discussion}
+\label{sec:discussion}
+
+The decisive quantity in progressive feature revelation is early-budget risk under partial observation, equivalently the number of measurements required to reach a usable error. Global feature orders optimize a population-level notion of usefulness and therefore blur subgroup-specific relevance. When subgroups are real---as in CT-slice descriptors and superconductivity measurements---this blurring is not cosmetic: it delays acquisition of the locally critical features, inflates anytime RMSE by large relative margins (often \(\sim\)25\% on CT slices; Table~\ref{tab:ct} and Figures~\ref{fig:main}--\ref{fig:scaling}), and requires several times as many measurements to match the same error target (Figure~\ref{fig:budget}). Regional menus attack exactly that mismatch by making the acquisition schedule piecewise constant across the input space, as outlined in Figure~\ref{fig:method}.
+
+Importantly, the method's success on CT slices as \(n\) grows (Figure~\ref{fig:scaling}) demonstrates that the benefit is not a small-sample artifact. With tens of thousands of training points, global stepwise has every opportunity to learn a strong pooled order; the persistent gap implies that heterogeneity remains after large-sample averaging. That is the strongest form of support for a regional acquisition policy.
+
+The synthetic and topo\_2\_1 outcomes (Figure~\ref{fig:mixed}, left; Figure~\ref{fig:rel}) prevent an overstated theory. Regional menus are not a free improvement for every high-\(p\) problem. They are most justified when:
+\begin{enumerate}
+  \item predictive mechanisms differ across regions of \(\mathbf{X}\);
+  \item those differences affect which features should be acquired early; and
+  \item each region still has enough samples for stable stepwise selection.
+\end{enumerate}
+
+If (1)--(2) fail, a single forward-stepwise menu is often enough. If signal itself fails, no ordering policy matters. The reporting of these cases forms part of the contribution: a two-stage mining pipeline is thereby converted into a scoped scientific claim rather than an end-to-end optimality result.
+
+Fully dynamic acquisition policies based on conditional mutual information or reinforcement learning can, in principle, adapt to the precise observed subset for each instance. Region menus are coarser. Their advantage is operational: classical statistics, transparent menus as stored knowledge, inexpensive deployment, and strong empirical returns on heterogeneous data. They are viewed as a strong inductive bias and a data-mining baseline for progressive revelation, not as the last word in adaptive acquisition.
+
+\paragraph{Limitations, in knowledge-discovery terms.}
+The present contribution is a \emph{two-stage} knowledge pipeline with a proper anytime protocol: regions are formed first, menus are mined second, and nested prefix models score the resulting knowledge. Partitioning is heuristic and is not jointly optimized with menu learning; that joint problem is left as future work, because an end-to-end learner would need to preserve inspectable menus and nested anytime evaluation rather than only full-feature risk. Soft-assignment temperature and the residual weight are only lightly tuned and then held fixed; the region count \(R\) and menu cap \(m_{\max}\) are chosen by simple \(n\)/\(p\) rules rather than by a fully automated model-selection criterion. Prefix models are linear, so strongly nonlinear local mechanisms may be misspecified. Regional covering sets are less stable than a single global top-eight list (Table~\ref{tab:stability}), which is the expected price of specializing knowledge; the anytime advantage, however, is stable across splits. Access constraints during experimentation limited additional ultra-high-\(p\) public sets. Soft menu ranking and richer gating networks are natural extensions that would move the method toward instance-adaptive policies while still storing regional menus as the knowledge object.
+
+In general, the following claim could be made: region-specific incremental feature menus improve progressive feature revelation for heterogeneous regression problems, as evidenced by large and stable anytime gains on CT slices and superconductivity (with supporting high-\(p\)/low-\(n\) evidence on tecator), by low overlap among early regional features, and by a remaining advantage over localized Lasso--LARS menus at early budgets, while mixed controls show that global stepwise can suffice under weak heterogeneity or weak signal.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Progressive feature revelation reframes feature selection as the design of acquisition knowledge: predictions must be accurate before all covariates are known. Region-specific incremental feature menus were introduced as a practical representation for that setting. Through partitioning of the input space and construction of per-region forward-stepwise menus with nested prefix models, acquisition order is adapted to local relevance while remaining statistically transparent and computationally scalable.
+
+The empirical message is clear and bounded. On heterogeneous real tasks---most notably large-scale CT-slice localization and superconductivity prediction---regional menus deliver substantial progressive-RMSE gains that survive large sample sizes, reach the same error targets with far fewer measurements, and remain advantageous across repeated splits, even though regional covering sets are less stable than a single global ranking. Localized Lasso--LARS, scored the same way, captures part of the regional gain but is a weaker early-budget constructor. On weak-signal data and on some correlated high-\(p\) synthetics, a strong global stepwise menu remains competitive, showing that regionalization is conditional on mechanism heterogeneity rather than universally mandatory. These positive and mixed results together motivate region-specific menus as inspectable local feature knowledge for anytime regression under partial observation, and as a strong baseline against which more elaborate dynamic acquisition methods should be compared.
+
+\section*{Author contributions}
+Hoa Dinh Nguyen designed the study, implemented the method, ran the experiments, and wrote the manuscript.
+
+\section*{Competing interests}
+The author declares that there are no competing interests.
+
+\section*{Funding}
+This research received no specific grant from any funding agency in the public, commercial, or not-for-profit sectors.
+
+\section*{Data and code availability}
+The datasets analyzed in this study are publicly available:
+\begin{itemize}
+  \item Relative location of CT slices on axial axis (UCI Machine Learning Repository): \url{https://archive.ics.uci.edu/dataset/206/relative+location+of+ct+slices+on+axial+axis}
+  \item Superconductivity data (UCI Machine Learning Repository): \url{https://archive.ics.uci.edu/dataset/464/superconductivty+data}
+  \item Tecator (OpenML): \url{https://www.openml.org/d/505}
+  \item topo\_2\_1 (OpenML): \url{https://www.openml.org/search?type=data&name=topo_2_1}
+\end{itemize}
+Synthetic data can be regenerated with the accompanying experiment scripts. Source code for region-specific incremental feature menus, selectors, progressive evaluation, figure generation, and the additional menu-overlap / localized-Lasso experiments is provided with this submission in the project directories \texttt{src/} and \texttt{examples/}; see the project \texttt{README.md}. The same code will be mirrored in a public GitHub repository when the manuscript is posted (the local package is the version of record for review).
+
+\section*{Declaration of generative AI and AI-assisted technologies in the manuscript preparation process}
+During the preparation of this work, the author used AI-assisted tools only for limited language editing and manuscript formatting. After using these tools, the author reviewed and edited the text and takes full responsibility for the content of the article. No AI tool was used to generate scientific claims, experimental results, or analyses.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
+
