@@ -8,6 +8,12 @@ venv/
 data/*
 !data/.gitignore
 !data/README.md
+# Large submission archives / binaries (keep sources in submission_* if needed)
+*.zip
+submission_*/ESM_5.zip
+submission_*/*_latex_sources.zip
+submission_*/*_code.zip
+submission_*/*_supplement.zip
 # LaTeX build files
 *.aux
 *.bbl

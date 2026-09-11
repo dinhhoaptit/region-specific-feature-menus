@@ -287,6 +287,34 @@ def compare_progressive_policies(
                 name="random",
             )
         )
+        from .selectors import select_mrmr, select_saola
+
+        saola_menu = select_saola(X_train, y_train, max_features=max_sel).selected
+        mrmr_menu = select_mrmr(
+            X_train, y_train, max_features=max_sel, random_state=random_state
+        ).selected
+        curves.append(
+            evaluate_global_menu_progressive(
+                X_train,
+                y_train,
+                X_test,
+                y_test,
+                menu=saola_menu,
+                budgets=base_budgets,
+                name="global_saola",
+            )
+        )
+        curves.append(
+            evaluate_global_menu_progressive(
+                X_train,
+                y_train,
+                X_test,
+                y_test,
+                menu=mrmr_menu,
+                budgets=base_budgets,
+                name="global_mrmr",
+            )
+        )
     return curves
 
 

@@ -34,7 +34,12 @@ def zip_latex() -> Path:
         KAIS / "sn-jnl.cls",
         KAIS / "sn-basic.bst",
     ]
-    figs = sorted((KAIS / "figures").glob("fig*.pdf"))
+    figdir = KAIS / "figures"
+    figs = [
+        p
+        for p in figdir.iterdir()
+        if p.is_file() and p.name.startswith("fig") and p.suffix.lower() in {".pdf", ".png", ".eps"}
+    ]
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in files:
             zf.write(p, p.name)
@@ -44,20 +49,32 @@ def zip_latex() -> Path:
 
 
 def zip_code() -> Path:
-    out = KAIS / f"{STEM}_code.zip"
-    include_dirs = ("src", "examples")
-    include_files = ("requirements.txt", "README.md")
+    out = KAIS / "ESM_5.zip"
+    skip_names = {
+        "kais_alternating_partition.py",
+        "package_kais_submission.py",
+        "write_kais_esm.py",
+    }
+    header = (
+        "Article: Region-Specific Incremental Feature Menus for Progressive Feature Revelation\n"
+        "Journal: Knowledge and Information Systems\n"
+        "Author: Hoa Dinh Nguyen\n"
+        "Affiliation: Posts and Telecommunications Institute of Technology, Hanoi, Vietnam\n"
+        "Corresponding email: hoand@ptit.edu.vn\n"
+        "Online Resource 5 (ESM_5.zip)\n"
+    )
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in include_files:
-            zf.write(ROOT / name, name)
+        zf.writestr("ESM_HEADER.txt", header)
+        zf.write(ROOT / "requirements.txt", "requirements.txt")
+        zf.write(ROOT / "README.md", "README.md")
         zf.write(ROOT / "data" / "README.md", "data/README.md")
         zf.write(KAIS / "CODE_AVAILABILITY.md", "CODE_AVAILABILITY.md")
-        for d in include_dirs:
+        for d in ("src", "examples"):
             base = ROOT / d
             for p in base.rglob("*"):
-                if p.is_dir():
+                if p.is_dir() or p.suffix == ".pyc" or "__pycache__" in p.parts:
                     continue
-                if p.suffix in {".pyc"} or "__pycache__" in p.parts:
+                if p.name in skip_names or p.name.startswith("_probe"):
                     continue
                 zf.write(p, p.relative_to(ROOT).as_posix())
     return out

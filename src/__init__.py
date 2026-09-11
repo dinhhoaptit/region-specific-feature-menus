@@ -30,7 +30,14 @@ from .regionalize import (
     pick_by_menu_jaccard,
     pick_by_train_bic,
 )
-from .selectors import SelectionResult, select_features, select_lasso_lars, select_forward_stepwise
+from .selectors import (
+    SelectionResult,
+    select_features,
+    select_forward_stepwise,
+    select_lasso_lars,
+    select_mrmr,
+    select_saola,
+)
 from .vif import VIFResult, vif_regression
 
 __all__ = [
@@ -40,6 +47,8 @@ __all__ = [
     "select_features",
     "select_lasso_lars",
     "select_forward_stepwise",
+    "select_saola",
+    "select_mrmr",
     "RegionFeatureMenus",
     "fit_region_menus",
     "fit_region_menus_alternating",

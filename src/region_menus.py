@@ -344,7 +344,7 @@ def fit_region_menus(
     Parameters
     ----------
     selector:
-        ``forward_stepwise`` (default), ``vif``, or ``lasso_lars``.
+        ``forward_stepwise`` (default), ``vif``, ``lasso_lars``, ``saola``, or ``mrmr``.
     partition:
         ``kmeans``, ``xy``, or ``residual``.
     assignment:
@@ -362,8 +362,8 @@ def fit_region_menus(
         raise ValueError("order_by must be 'abs_corr' or 'index'")
     if assignment not in {"hard", "soft"}:
         raise ValueError("assignment must be 'hard' or 'soft'")
-    if selector not in {"vif", "lasso_lars", "forward_stepwise"}:
-        raise ValueError("selector must be vif, lasso_lars, or forward_stepwise")
+    if selector not in {"vif", "lasso_lars", "forward_stepwise", "saola", "mrmr"}:
+        raise ValueError("selector must be vif, lasso_lars, forward_stepwise, saola, or mrmr")
 
     n, p = X.shape
     names = list(feature_names) if feature_names is not None else None

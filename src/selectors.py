@@ -6,6 +6,8 @@ Supported methods
 - ``lasso_lars``: LARS/Lasso regularization path; order = first-entry order,
   support = nonzero coeffs at CV-chosen lambda
 - ``forward_stepwise``: greedy forward selection with BIC stopping
+- ``saola``: online pairwise redundancy pruning (SAOLA-style; Yu et al.)
+- ``mrmr``: minimum-redundancy maximum-relevance ranking (Peng et al.)
 """
 
 from __future__ import annotations
@@ -14,11 +16,12 @@ from dataclasses import dataclass, field
 from typing import Literal, Sequence
 
 import numpy as np
+from sklearn.feature_selection import mutual_info_regression
 from sklearn.linear_model import LassoLarsCV, lars_path
 
 from .vif import vif_regression
 
-SelectorName = Literal["vif", "lasso_lars", "forward_stepwise"]
+SelectorName = Literal["vif", "lasso_lars", "forward_stepwise", "saola", "mrmr"]
 
 
 @dataclass
@@ -267,6 +270,175 @@ def select_forward_stepwise(
     )
 
 
+def _abs_corr_matrix(X: np.ndarray) -> np.ndarray:
+    Xc = X - X.mean(axis=0, keepdims=True)
+    norms = np.linalg.norm(Xc, axis=0)
+    norms = np.where(norms < 1e-12, 1.0, norms)
+    corr = (Xc.T @ Xc) / np.outer(norms, norms)
+    return np.abs(np.nan_to_num(corr, nan=0.0))
+
+
+def _abs_corr_with_y(X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    y0 = y - y.mean()
+    y_norm = float(np.linalg.norm(y0)) + 1e-12
+    Xc = X - X.mean(axis=0, keepdims=True)
+    x_norm = np.linalg.norm(Xc, axis=0)
+    x_norm = np.where(x_norm < 1e-12, 1.0, x_norm)
+    return np.abs((Xc.T @ y0) / (x_norm * y_norm))
+
+
+def select_saola(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    max_features: int | None = None,
+    delta: float = 0.0,
+    feature_order: Sequence[int] | None = None,
+) -> SelectionResult:
+    """SAOLA-style online streaming feature selection for regression menus.
+
+    Features arrive sequentially (default: decreasing |corr| with ``y``).
+    A candidate is kept only if its relevance exceeds ``delta`` and it is not
+    pairwise-redundant with any already selected feature under the SAOLA
+    comparison rules of Yu, Wu, Ding & Pei (TKDD 2016 / ICDM 2014), using
+    absolute Pearson correlation as the continuous relevance/redundancy score.
+    Acceptance order is the progressive-revelation menu; if fewer than
+    ``max_features`` survive, remaining candidates are appended by relevance.
+    """
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float).ravel()
+    n, p = X.shape
+    if n < 3 or p == 0:
+        intercept, coef = _final_ols(X, y, [])
+        return SelectionResult(selected=[], intercept=intercept, coef=coef, method="saola")
+
+    rel = _abs_corr_with_y(X, y)
+    if feature_order is None:
+        arrival = list(np.argsort(-rel))
+    else:
+        arrival = [int(j) for j in feature_order]
+
+    # Cache pairwise |corr| lazily for visited features.
+    selected: list[int] = []
+    pair_cache: dict[tuple[int, int], float] = {}
+
+    def pair_abs(i: int, j: int) -> float:
+        a, b = (i, j) if i <= j else (j, i)
+        key = (a, b)
+        if key not in pair_cache:
+            xi = X[:, a] - X[:, a].mean()
+            xj = X[:, b] - X[:, b].mean()
+            denom = (np.linalg.norm(xi) * np.linalg.norm(xj)) + 1e-12
+            pair_cache[key] = float(abs(np.dot(xi, xj) / denom))
+        return pair_cache[key]
+
+    for f in arrival:
+        rf = float(rel[f])
+        if rf <= float(delta):
+            continue
+        discard_f = False
+        to_remove: list[int] = []
+        for s in selected:
+            rs = float(rel[s])
+            rfs = pair_abs(int(f), int(s))
+            # SAOLA pairwise rules with |corr| as the association score.
+            if rf <= rs and rfs >= rf:
+                discard_f = True
+                break
+            if rf > rs and rfs >= rs:
+                to_remove.append(int(s))
+        if discard_f:
+            continue
+        for s in to_remove:
+            if s in selected:
+                selected.remove(s)
+        selected.append(int(f))
+        if max_features is not None and len(selected) >= int(max_features):
+            break
+
+    if max_features is not None and len(selected) < int(max_features):
+        for f in arrival:
+            if f not in selected:
+                selected.append(int(f))
+            if len(selected) >= int(max_features):
+                break
+
+    intercept, coef = _final_ols(X, y, selected)
+    return SelectionResult(
+        selected=selected,
+        intercept=intercept,
+        coef=coef,
+        method="saola",
+        extras={"delta": float(delta), "n_arrival": int(len(arrival))},
+    )
+
+
+def select_mrmr(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    max_features: int | None = None,
+    random_state: int | None = 0,
+) -> SelectionResult:
+    """Minimum-redundancy maximum-relevance (mRMR) ranking for regression.
+
+    Relevance uses mutual information with the response; redundancy uses mean
+    absolute Pearson correlation with already chosen features (Peng, Long &
+    Ding, TPAMI 2005). The incremental ranking is the acquisition menu.
+    """
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float).ravel()
+    n, p = X.shape
+    if n < 3 or p == 0:
+        intercept, coef = _final_ols(X, y, [])
+        return SelectionResult(selected=[], intercept=intercept, coef=coef, method="mrmr")
+
+    max_k = p if max_features is None else min(int(max_features), p)
+    # Mutual information can be expensive at large n; subsample rows.
+    if n > 4000:
+        rng = np.random.default_rng(random_state)
+        idx = rng.choice(n, size=4000, replace=False)
+        Xs, ys = X[idx], y[idx]
+    else:
+        Xs, ys = X, y
+
+    relevance = mutual_info_regression(Xs, ys, random_state=random_state)
+    relevance = np.asarray(relevance, dtype=float)
+    relevance = np.nan_to_num(relevance, nan=0.0)
+
+    pair_abs = _abs_corr_matrix(X)
+    selected: list[int] = []
+    remaining = set(range(p))
+
+    # First feature: pure relevance.
+    first = int(np.argmax(relevance))
+    selected.append(first)
+    remaining.remove(first)
+
+    while remaining and len(selected) < max_k:
+        best_j = None
+        best_score = -np.inf
+        for j in remaining:
+            red = float(np.mean(pair_abs[j, selected])) if selected else 0.0
+            score = float(relevance[j] - red)
+            if score > best_score:
+                best_score = score
+                best_j = int(j)
+        if best_j is None:
+            break
+        selected.append(best_j)
+        remaining.remove(best_j)
+
+    intercept, coef = _final_ols(X, y, selected)
+    return SelectionResult(
+        selected=selected,
+        intercept=intercept,
+        coef=coef,
+        method="mrmr",
+        extras={"relevance_top": float(np.max(relevance)) if p else 0.0},
+    )
+
+
 def select_features(
     X: np.ndarray,
     y: np.ndarray,
@@ -285,4 +457,10 @@ def select_features(
         return select_forward_stepwise(
             X, y, **{k: v for k, v in kwargs.items() if k in allowed}
         )
+    if method == "saola":
+        allowed = {"max_features", "delta", "feature_order"}
+        return select_saola(X, y, **{k: v for k, v in kwargs.items() if k in allowed})
+    if method == "mrmr":
+        allowed = {"max_features", "random_state"}
+        return select_mrmr(X, y, **{k: v for k, v in kwargs.items() if k in allowed})
     raise ValueError(f"Unknown selector method: {method}")
