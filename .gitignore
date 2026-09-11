@@ -13,9 +13,9 @@ submission_kais/
 submission_kbs/
 submission_paa/
 # Local packaging helpers / unused probes
-examples/package_kais_submission.py
-examples/write_kais_esm.py
-examples/kais_alternating_partition.py
+examples/package_paa_submission.py
+examples/write_paa_esm.py
+examples/paa_alternating_partition.py
 examples/_probe*
 # Large archives / build artefacts
 *.zip

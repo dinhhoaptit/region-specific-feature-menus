@@ -1,4 +1,4 @@
-"""KAIS steps 7-8: measurement budget to target error, and menu stability across splits."""
+"""PAA steps 7-8: measurement budget to target error, and menu stability across splits."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from src.selectors import select_forward_stepwise
 from src.region_menus import _fit_prefix_models
 from src.progressive import _metrics
 
-OUTDIR = ROOT / "submission_kais"
+OUTDIR = ROOT / "submission_paa"
 FIGDIR = OUTDIR / "figures"
 FIGDIR.mkdir(parents=True, exist_ok=True)
 

@@ -1,6 +1,6 @@
 """Compare region menus with SAOLA-style and mRMR global acquisition menus.
 
-Writes submission_kais/modern_baselines.json used by Table tab:modern.
+Writes submission_paa/modern_baselines.json used by Table tab:modern.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from src.progressive import evaluate_global_menu_progressive, evaluate_region_me
 from src.region_menus import fit_region_menus
 from src.selectors import select_forward_stepwise, select_mrmr, select_saola
 
-OUTDIR = ROOT / "submission_kais"
+OUTDIR = ROOT / "submission_paa"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 

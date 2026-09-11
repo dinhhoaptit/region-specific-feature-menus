@@ -1,8 +1,8 @@
 """Job (5): name regional menus using UCI feature documentation.
 
-    python examples/kais_named_menus.py
+    python examples/paa_named_menus.py
 
-Writes ``submission_kais/named_menus.json``.
+Writes ``submission_paa/named_menus.json``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from src.feature_catalog import (
 )
 from src.region_menus import fit_region_menus
 
-OUT = ROOT / "submission_kais" / "named_menus.json"
+OUT = ROOT / "submission_paa" / "named_menus.json"
 K = 6
 
 

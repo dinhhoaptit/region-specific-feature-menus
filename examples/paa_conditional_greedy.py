@@ -6,11 +6,11 @@ chooses the next unused feature on a k-NN neighbourhood in the *already
 observed* coordinates, then predicts with nested OLS on that query-specific set.
 
 Run:
-    python examples/kais_conditional_greedy.py
-    python examples/kais_conditional_greedy.py --ct --max-rows 8000
+    python examples/paa_conditional_greedy.py
+    python examples/paa_conditional_greedy.py --ct --max-rows 8000
 
 Requires ``data/*.npz`` only for the optional public-data flags.
-Writes ``submission_kais/conditional_greedy.json``.
+Writes ``submission_paa/conditional_greedy.json``.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from src.progressive import evaluate_global_menu_progressive, evaluate_region_me
 from src.region_menus import fit_region_menus
 from src.selectors import select_forward_stepwise
 
-OUT = ROOT / "submission_kais" / "conditional_greedy.json"
+OUT = ROOT / "submission_paa" / "conditional_greedy.json"
 
 
 def _at(curve, b: int) -> float | None:

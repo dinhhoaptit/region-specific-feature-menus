@@ -1,6 +1,6 @@
-"""Extra KAIS evidence: regional menus as knowledge + localized Lasso neighbor.
+"""Extra PAA evidence: regional menus as knowledge + localized Lasso neighbor.
 
-Writes JSON under submission_kais/ and prints a LaTeX-ready table.
+Writes JSON under submission_paa/ and prints a LaTeX-ready table.
 Uses the same splits/preprocessing as generate_paper_figures.py.
 """
 
@@ -21,7 +21,7 @@ from src import compare_progressive_policies, fit_region_menus
 from src.progressive import evaluate_region_menus_progressive
 
 
-OUTDIR = ROOT / "submission_kais"
+OUTDIR = ROOT / "submission_paa"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 
