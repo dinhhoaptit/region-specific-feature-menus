@@ -47,6 +47,8 @@ python examples/kais_modern_baselines.py
 python examples/generate_paper_figures.py
 ```
 
+JSON outputs and manuscript packages are written locally under `submission_*/` (not tracked in this repository). Figure PDFs can be regenerated with `examples/generate_paper_figures.py` and `examples/kais_stability_budget.py`.
+
 ## Layout
 
 | Path | Contents |

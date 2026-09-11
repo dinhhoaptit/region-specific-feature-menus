@@ -8,13 +8,17 @@ venv/
 data/*
 !data/.gitignore
 !data/README.md
-# Large submission archives / binaries (keep sources in submission_* if needed)
+# Journal submission packages stay local (not part of the public code repo)
+submission_kais/
+submission_kbs/
+submission_paa/
+# Local packaging helpers / unused probes
+examples/package_kais_submission.py
+examples/write_kais_esm.py
+examples/kais_alternating_partition.py
+examples/_probe*
+# Large archives / build artefacts
 *.zip
-submission_*/ESM_5.zip
-submission_*/*_latex_sources.zip
-submission_*/*_code.zip
-submission_*/*_supplement.zip
-# LaTeX build files
 *.aux
 *.bbl
 *.blg
@@ -23,6 +27,9 @@ submission_*/*_supplement.zip
 *.synctex.gz
 *.fdb_latexmk
 *.fls
+# Drafts / local-only
+paper_draft_region_feature_menus.md
+Region-Specific_IFM_for_PFR_latex_sources.pdf
 # OS / editor
 .DS_Store
 Thumbs.db
