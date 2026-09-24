@@ -12,10 +12,11 @@ data/*
 submission_kais/
 submission_kbs/
 submission_paa/
+submission_prl/
 # Local packaging helpers / unused probes
-examples/package_paa_submission.py
-examples/write_paa_esm.py
-examples/paa_alternating_partition.py
+examples/package_submission.py
+examples/write_esm.py
+examples/alternating_partition.py
 examples/_probe*
 # Large archives / build artefacts
 *.zip

@@ -4,7 +4,7 @@ Fit both policies on an inner training slice, pick by validation RMSE at
 budget 5 (also report train BIC and early-menu Jaccard), then refit the
 winner on the full training split. Test RMSE is never used to choose.
 
-    python examples/paa_when_to_regionalize.py --all --max-rows 8000
+    python examples/when_to_regionalize.py --all --max-rows 8000
 """
 
 from __future__ import annotations

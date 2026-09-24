@@ -6,8 +6,8 @@ chooses the next unused feature on a k-NN neighbourhood in the *already
 observed* coordinates, then predicts with nested OLS on that query-specific set.
 
 Run:
-    python examples/paa_conditional_greedy.py
-    python examples/paa_conditional_greedy.py --ct --max-rows 8000
+    python examples/conditional_greedy.py
+    python examples/conditional_greedy.py --ct --max-rows 8000
 
 Requires ``data/*.npz`` only for the optional public-data flags.
 Writes ``submission_paa/conditional_greedy.json``.

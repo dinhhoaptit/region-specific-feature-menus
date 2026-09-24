@@ -38,16 +38,16 @@ See `data/README.md`. Experiments then run offline from `data/*.npz`.
 ## Reproduce paper experiments
 
 ```text
-python examples/paa_extra_evidence.py
-python examples/paa_stability_budget.py
-python examples/paa_conditional_greedy.py --ct --sc --max-rows 8000
-python examples/paa_when_to_regionalize.py --all --max-rows 8000
-python examples/paa_named_menus.py
-python examples/paa_modern_baselines.py
+python examples/extra_evidence.py
+python examples/stability_budget.py
+python examples/conditional_greedy.py --ct --sc --max-rows 8000
+python examples/when_to_regionalize.py --all --max-rows 8000
+python examples/named_menus.py
+python examples/modern_baselines.py
 python examples/generate_paper_figures.py
 ```
 
-JSON outputs and manuscript packages are written locally under `submission_*/` (not tracked in this repository). Figure PDFs can be regenerated with `examples/generate_paper_figures.py` and `examples/paa_stability_budget.py`.
+JSON outputs and manuscript packages are written locally under `submission_*/` (not tracked in this repository). Figure PDFs can be regenerated with `examples/generate_paper_figures.py` and `examples/stability_budget.py`.
 
 ## Layout
 

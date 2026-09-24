@@ -1,6 +1,6 @@
 """Job (5): name regional menus using UCI feature documentation.
 
-    python examples/paa_named_menus.py
+    python examples/named_menus.py
 
 Writes ``submission_paa/named_menus.json``.
 """
